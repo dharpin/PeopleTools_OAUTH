@@ -1,0 +1,96 @@
+Local Document &doc, &doc_tmpl, &doc_tmp2;
+Local Compound &com, &com_tmpl, &com_tmp2;
+Local XmlDoc &xmlDoc, &xmldocreturn;
+Local string &client_id, &client_secret, &url2, &scope;
+
+/*Retrieve client id, url, scope and client secret to be passed to get token*/
+SQLExec("SELECT ZZ_CLIENT_ID, URL, ZZ_CLIENT_SECRET, ZZ_SCOPE FROM PS_ZZ_OAUTH_SETUP WHERE ZZ_APP_ID = '{application name}'", &client_id, &url2, &client_secret, &scope);
+&string = "grant_type=client_credentials&scope=" | &scope | "&client_id=" | &client_id | "&client_secret=" | &client_secret;
+
+/*Create Java object to call rest service requesting token */
+Local JavaObject &url;
+Local JavaObject &conn;
+Local JavaObject &r, &s;
+Local any &line;
+Local string &output;
+Local JavaObject &inet;
+Local string &address;
+
+&jconn = CreateJavaObject("java.net.URL", &url2).openConnection();
+&jsetRequestMethod = GetJavaClass("java.lang.Class").forName("java.net.HttpURLConnection").getMethod("setRequestMethod", CreateJavaObject("java.lang.Class[]", GetJavaClass("java.lang.Class").forName("java.lang.String")));
+&jsetRequestMethod.invoke(&jconn, CreateJavaObject("java.lang.Object[]", CreateJavaObject("java.lang.String", "POST")));
+&jconn.setRequestProperty("content-type", "application/x-www-form-urlencoded");
+&jconn.setRequestProperty("cache-control", "no-cache");
+&jconn.setDoOutput( True);
+&jconn.setDoInput( True);
+
+/*Write java string to the java connection */
+&s = CreateJavaObject("java.io.BufferedWriter", CreateJavaObject("java.io.OutputStreamWriter", &jconn.getOutputStream()));
+&s.write(&string);
+&s.close();
+
+/*Read the output from the java connection and store it in &output variable*/
+&output = "";
+&r = CreateJavaObject("java.io.BufferedReader", CreateJavaObject("java.io.InputStreamReader", &jconn.getInputStream()));
+While 1 = 1
+   &char = Char(&r.read());
+   &output = &output | &char;
+   If &char = "}" Then
+      Break;
+   End-If;
+End-While;
+&r.close();
+
+/*Open JSON parser to scan &output variable to find the access token and store access token in &token*/
+Local JsonParser &parser2_ = CreateJsonParser();
+Local boolean &status2_ = &parser2_.Parse(&output);
+Local JsonObject &jObj2_ = &parser2_.GetRootObject();
+Local JsonObject &jobject2;
+Local integer &i2;
+
+If &jObj2_.IsExist("access_token") Then
+   Local string &token = &jObj2_.GetProperty("access_token");
+End-If;
+
+/*Use sync message to pass token to company to retrieve the requested data */
+&msg = CreateMessage(Operation.{Your Service Operation});
+&bret = &msg.ibinfo.ibconnectorinfo.AddConnectorProperties("Content-Type", "application/json", %HttpHeader);
+&bret = &msg.IBInfo.IBConnectorInfo.AddConnectorProperties("Authorization ", "Bearer " | &token, %HttpHeader);
+
+&doc_tmpl = &msg.GetURIDocument();
+&com_tmpl = &doc_tmpl.DocumentElement;
+
+&com_tmpl.GetPropertyByName("userid").value = {USERID};
+&msg.URIResourceIndex = 1;
+
+
+&resp = %IntBroker.SyncRequest(&msg);
+Local string &response = &resp.getcontentstring();
+
+/*Create json parser to look for the data within the response from vendor */
+Local JsonParser &parser_ = CreateJsonParser();
+Local boolean &status_ = &parser_.Parse(&response);
+Local JsonObject &jObj_ = &parser_.GetRootObject();
+Local number &nbr = &jObj_.GetChildCount();
+Local JsonObject &jobject;
+Local integer &i;
+
+If &jObj_.IsExist("data") Then
+   
+   Local JsonObject &messages = &jObj_.GetJsonObject("data");
+   Local number &somenbr = &messages.GetChildCount();
+   rem MessageBox(0, "", 0, 0, &messages.GetProperty("userId"));
+   If &messages.IsExist("workerStatus") Then
+      Local JsonObject &status = &messages.GetJsonObject("workerStatus");
+      MessageBox(0, "", 0, 0, "Active Employee: " | &status.GetProperty("active"));
+      If &status.GetProperty("active") = "True" Then
+         CANCEL_BTN.Enabled = True;
+         SAVE_BTN.Enabled = False;
+      Else
+         CANCEL_BTN.Enabled = False;
+         SAVE_BTN.Enabled = True;
+      End-If;
+   End-If;
+   
+   
+End-If;
